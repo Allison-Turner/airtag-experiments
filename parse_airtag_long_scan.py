@@ -5,7 +5,7 @@ import re
 filepath="airtag_out.txt"
 fields = ['timestamp', 'packet_num', 'channel_num', 'access_addr', 'adv_pdu', 'tx', 'rx', 'payload_length', 'advertising_addr', 'data', 'crc']
 num_fields = len(fields)
-field_junk_regex = ["us", "Pkt", "Ch", "AA:", "ADV_PDU_t((\d)+):", "T", "R", "PloadL", "AdvA:", "Data:", "CRC"]
+field_junk_regex = ["us", "Pkt", "Ch", "AA:", "ADV_PDU_t((\d)+):", "T", "R", "PloadL", "AdvA:|A((\d)+):", "Data:|A((\d)+):", "CRC"]
 outfile="airtag_long_scan.csv"
 
 def remove_data_labels(raw):
