@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 import pandas as pd
-import re
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as mpc
+import re
 
 raw_sdr_output_file="airtag_out.txt"
 csv_outfile = "airtag_long_scan.csv"
 png_outfile = "intervals.png"
 
-#                0            1             2              3              4      5         6         7                 8                   9       10
-fields       = ['timestamp', 'packet_num', 'channel_num', 'access_addr', 'pdu', 'tx',     'rx',     'payload_length', 'advertising_addr', 'data', 'crc']
-field_dtypes = [np.int64,     np.int64,     np.int64,      str,           str,       np.int64, np.int64, np.int64,         str,                str,    np.int64]
-field_dtype_dict = dict(zip(fields, field_dtypes))
-
+#                    0            1             2              3              4                    5     6     7                 8                   9                         10
+fields           = ['timestamp', 'packet_num', 'channel_num', 'access_addr', 'pdu',               'tx', 'rx', 'payload_length', 'advertising_addr', 'data',                   'crc']
+field_junk_regex = ["us",        "Pkt",        "Ch",          "AA:",         "ADV_PDU_t((\d)+):", "T",  "R",  "PloadL",         "AdvA:|A((\d)+):",  "Data:|A((\d)+):|Byte:", "CRC"]
 num_fields = len(fields)
-
-field_junk_regex = ["us", "Pkt", "Ch", "AA:", "ADV_PDU_t((\d)+):", "T", "R", "PloadL", "AdvA:|A((\d)+):", "Data:|A((\d)+):", "CRC"]
 
 
 
@@ -54,6 +51,7 @@ def remove_data_labels(raw):
 
 def convert_btle_rx_logs_to_csv():
     dataLog = []
+
     with open(raw_sdr_output_file, 'rt') as f:
         data = f.readlines()
     for line in data:
@@ -75,7 +73,6 @@ def convert_btle_rx_logs_to_csv():
 
         error_entries = pd.concat([error_entries, data_line])
 
-
     ble_msgs_raw = pd.read_csv(raw_sdr_output_file, names=fields, delimiter=' ', skiprows=6, on_bad_lines='skip')
 
     total_raw_records  = len(ble_msgs_raw)
@@ -83,26 +80,28 @@ def convert_btle_rx_logs_to_csv():
     ble_msgs = remove_data_labels(ble_msgs_raw)
     ble_msgs = pd.concat([ble_msgs, error_entries])
 
-    total_records = len(ble_msgs)
-    print(total_records)
-
-    print(ble_msgs[fields[4]].unique())
-
     ble_msgs.to_csv(csv_outfile, header=True, columns = fields, index=False)
 
 
 
+def read_ble_msgs_from_csv():
+    ble_msgs = pd.read_csv(csv_outfile, header=0, names=fields, delimiter=',')
+    for col in fields:
+        if (col != 'access_addr') and (col != 'pdu') and (col != 'advertising_addr') and (col != 'data'):
+            ble_msgs[col] = pd.to_numeric(ble_msgs[col], errors='coerce')
+    
+    ble_msgs = ble_msgs.sort_values(by=fields[1])
+
+    return ble_msgs
+
+
+
 def graph_packet_capture_intervals(ble_msgs):
-    adv_ind_msgs = ble_msgs
-    other_msgs = pd.DataFrame(columns=fields)
+    
+    adv_ind_msgs = ble_msgs.loc[ble_msgs[fields[4]] == 'ADV_IND']
+    other_msgs = ble_msgs.loc[ble_msgs[fields[4]] != 'ADV_IND']
 
-    for i, row in ble_msgs.iterrows():
-        if (row[fields[4]] != 'ADV_IND'):
-            adv_ind_msgs = adv_ind_msgs.drop(i)
-            other_msgs = other_msgs.append(ble_msgs.iloc[i])
 
-    print(len(adv_ind_msgs))
-    print(len(other_msgs))
 
     xmin = ble_msgs[fields[1]].min()
     xmax = ble_msgs[fields[1]].max()
@@ -113,16 +112,57 @@ def graph_packet_capture_intervals(ble_msgs):
     yrange = ymax - ymin
 
     fig, ax = plt.subplots()
-    fig.set_size_inches(10, 14)
+    fig.set_size_inches(20, 20)
     plt.title('Apple Airtag BLE Advertisement Frequency Over 2+ Days of Faraday Cage Isolation')
     plt.xlabel('Packet Number')
     plt.ylabel('Microseconds Since Last Packet')
-    ax.axis([(xmin - (xrange * 0.1)), (xmax + (xrange * 0.1)), (ymin - (yrange * 0.1)), (ymax + (yrange * 0.1))])
+    ax.axis([(xmin - (xrange * 0.05)), (xmax + (xrange * 0.05)), (ymin - (yrange * 0.05)), (ymax + (yrange * 0.05))])
 
-    adv_ind_scatter = ax.scatter(adv_ind_msgs[fields[1]], adv_ind_msgs[fields[0]], c='#00cecb', alpha=0.5)
-    other_pdu_scatter = ax.scatter(other_msgs[fields[1]], other_msgs[fields[0]], c='#ff5b5e', alpha=0.7)
+
+    unique_adv_addrs_adv_ind = adv_ind_msgs[fields[8]].unique()
+    unique_adv_addrs_other_pdu = other_msgs[fields[8]].unique()
+
+    pnum_of_first_adv_addr_occurence = []
+
+    steps = np.linspace(start=0.0, stop=1.0, num=(len(unique_adv_addrs_adv_ind) + len(unique_adv_addrs_other_pdu)))
+    color_map = plt.cm.get_cmap('Spectral')
+    addr_colors = list(map((lambda x : mpc.rgb2hex(color_map(x))), steps))
+    c_i = 0
+
+    for adv_addr in unique_adv_addrs_adv_ind:
+        ix = adv_ind_msgs.index[adv_ind_msgs[fields[8]] == adv_addr].tolist()
+        
+        if len(ix) > 0:
+            first = min(ix)
+            pnum_of_first_adv_addr_occurence.append(adv_ind_msgs.at[first, fields[1]])
+
+            rows = adv_ind_msgs.loc[adv_ind_msgs[fields[8]] == adv_addr]
+            ax.scatter(rows[fields[1]], rows[fields[0]], c=addr_colors[c_i], alpha=0.5)
+
+            c_i += 1
+
+        #Strip null value
+        else:
+            np.delete(unique_adv_addrs_adv_ind, np.where(unique_adv_addrs_adv_ind==adv_addr))
+
+
+    for adv_addr in unique_adv_addrs_other_pdu:
+        ix = other_msgs.index[other_msgs[fields[8]] == adv_addr].tolist()
+        
+        if len(ix) > 0:
+            first = min(ix)
+            pnum_of_first_adv_addr_occurence.append(other_msgs.at[first, fields[1]])
+
+            rows = other_msgs.loc[other_msgs[fields[8]] == adv_addr]
+            ax.scatter(rows[fields[1]], rows[fields[0]], c=addr_colors[c_i])
+
+            c_i += 1
+
+        #Strip null value
+        else:
+            np.delete(unique_adv_addrs_other_pdu, np.where(unique_adv_addrs_other_pdu==adv_addr))
+
     plt.grid()
-
     plt.savefig(png_outfile, dpi=200)
 
     plt.cla()
@@ -133,14 +173,11 @@ def graph_packet_capture_intervals(ble_msgs):
 def main():
     convert_btle_rx_logs_to_csv()
 
-    ble_msgs = pd.read_csv(csv_outfile, header=0, names=fields, delimiter=',')#, dtype=field_dtype_dict
-    for col in fields:
-        if (col != 'access_addr') and (col != 'pdu') and (col != 'advertising_addr') and (col != 'data'):
-            ble_msgs[col] = pd.to_numeric(ble_msgs[col], errors='coerce')
+    ble_msgs = read_ble_msgs_from_csv()
 
     graph_packet_capture_intervals(ble_msgs)
 
-    print(ble_msgs[fields[8]].unique())
+
 
 if __name__=="__main__":
     main()
