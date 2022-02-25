@@ -9,9 +9,9 @@ raw_sdr_output_file="airtag_out.txt"
 csv_outfile = "airtag_long_scan.csv"
 png_outfile = "intervals.png"
 
-#                    0            1             2              3              4                    5     6     7                 8                   9                         10
-fields           = ['timestamp', 'packet_num', 'channel_num', 'access_addr', 'pdu',               'tx', 'rx', 'payload_length', 'advertising_addr', 'data',                   'crc']
-field_junk_regex = ["us",        "Pkt",        "Ch",          "AA:",         "ADV_PDU_t((\d)+):", "T",  "R",  "PloadL",         "AdvA:|A((\d)+):",  "Data:|A((\d)+):|Byte:", "CRC"]
+#                    0                        1             2              3              4                    5     6     7                 8                   9                         10
+fields           = ['us_since_last_capture', 'packet_num', 'channel_num', 'access_addr', 'pdu',               'tx', 'rx', 'payload_length', 'advertising_addr', 'data',                   'crc']
+field_junk_regex = ["us",                    "Pkt",        "Ch",          "AA:",         "ADV_PDU_t((\d)+):", "T",  "R",  "PloadL",         "AdvA:|A((\d)+):",  "Data:|A((\d)+):|Byte:",  "CRC"]
 num_fields = len(fields)
 
 
@@ -94,13 +94,27 @@ def read_ble_msgs_from_csv():
 
     return ble_msgs
 
+def generate_time_from_start_vals(ble_msgs):
+    ble_msgs = ble_msgs.sort_values(by=fields[1])
+    ts = 0
+    ts_arr = []
 
+    for i in range(len(ble_msgs)):
+        ts = ts + ble_msgs.at[i, fields[0]]
+        ts_arr.append(ts)
+
+    dur_secs = ts / 1000000.0
+    dur_mins = dur_secs / 60.0
+    dur_hrs = dur_mins / 60.0
+
+    print("Total scan duration: " + str(dur_hrs) + " hours")
+
+    return pd.Series(ts_arr)
 
 def graph_packet_capture_intervals(ble_msgs):
     
     adv_ind_msgs = ble_msgs.loc[ble_msgs[fields[4]] == 'ADV_IND']
     other_msgs = ble_msgs.loc[ble_msgs[fields[4]] != 'ADV_IND']
-
 
 
     xmin = ble_msgs[fields[1]].min()
@@ -133,12 +147,11 @@ def graph_packet_capture_intervals(ble_msgs):
         ix = adv_ind_msgs.index[adv_ind_msgs[fields[8]] == adv_addr].tolist()
         
         if len(ix) > 0:
-            first = min(ix)
-            pnum_of_first_adv_addr_occurence.append(adv_ind_msgs.at[first, fields[1]])
-
+            fst = min(ix)
+            pnum_of_first_adv_addr_occurence.append(adv_ind_msgs.at[fst, fields[1]])
             rows = adv_ind_msgs.loc[adv_ind_msgs[fields[8]] == adv_addr]
-            ax.scatter(rows[fields[1]], rows[fields[0]], c=addr_colors[c_i], alpha=0.5)
 
+            ax.scatter(rows[fields[1]], rows[fields[0]], c=addr_colors[c_i], alpha=0.5)
             c_i += 1
 
         #Strip null value
@@ -150,17 +163,26 @@ def graph_packet_capture_intervals(ble_msgs):
         ix = other_msgs.index[other_msgs[fields[8]] == adv_addr].tolist()
         
         if len(ix) > 0:
-            first = min(ix)
-            pnum_of_first_adv_addr_occurence.append(other_msgs.at[first, fields[1]])
-
+            fst = min(ix)
+            pnum_of_first_adv_addr_occurence.append(other_msgs.at[fst, fields[1]])
             rows = other_msgs.loc[other_msgs[fields[8]] == adv_addr]
-            ax.scatter(rows[fields[1]], rows[fields[0]], c=addr_colors[c_i])
 
+            ax.scatter(rows[fields[1]], rows[fields[0]], c=addr_colors[c_i])
             c_i += 1
 
         #Strip null value
         else:
             np.delete(unique_adv_addrs_other_pdu, np.where(unique_adv_addrs_other_pdu==adv_addr))
+
+
+
+    firsts = pd.DataFrame(columns=fields)
+
+    for pnum in pnum_of_first_adv_addr_occurence:
+        row = ble_msgs.loc[ble_msgs[fields[1]] == pnum]
+        firsts = pd.concat([ firsts, row ])
+
+    firsts.to_csv('first_appearance_of_adv_addr.csv', index=False)
 
     plt.grid()
     plt.savefig(png_outfile, dpi=200)
@@ -171,12 +193,13 @@ def graph_packet_capture_intervals(ble_msgs):
 
 
 def main():
-    convert_btle_rx_logs_to_csv()
+    #convert_btle_rx_logs_to_csv()
 
     ble_msgs = read_ble_msgs_from_csv()
 
     graph_packet_capture_intervals(ble_msgs)
 
+    #generate_time_from_start_vals(ble_msgs)
 
 
 if __name__=="__main__":
